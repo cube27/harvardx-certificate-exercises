@@ -49,6 +49,16 @@ dat2=read.csv(file.path(path, filename2))
 #check class
 # filename is defined in the previous video
 # read.csv converts strings to factors
-dat2 <- read.csv(filename)
+dat2 <- read.csv(fullpath)
 class(dat2$abb)
 class(dat2$region)
+
+#download from internet
+url <- "https://raw.githubusercontent.com/rafalab/dslabs/master/inst/extdata/murders.csv"
+dat <- read_csv(url)
+download.file(url, "murders.csv")
+tempfile()
+tmp_filename <- tempfile()
+download.file(url, tmp_filename)
+dat <- read_csv(tmp_filename)
+file.remove(tmp_filename)
