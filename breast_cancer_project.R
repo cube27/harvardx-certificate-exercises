@@ -121,3 +121,38 @@ set.seed(5, sample.kind = "Rounding")
 train_loess <- train(train_x, train_y, method = "gamLoess")
 loess_preds <- predict(train_loess, test_x)
 mean(loess_preds == test_y)
+
+#fit knn model
+set.seed(7,sample.kind = "Rounding")
+train_knn <- train(train_x, train_y, method = "knn",
+                   tuneGrid = data.frame(k = seq(3, 21, 2)))
+knn_preds <- predict(train_knn, test_x)
+train_knn
+mean(knn_preds == test_y)
+
+#fit random forest model
+set.seed(9,sample.kind = "Rounding")
+train_rf <- train(train_x, train_y, method = "rf",
+                  importance = TRUE,
+                  tuneGrid = data.frame(mtry = c(3,5,7,9)))
+rf_preds <- predict(train_rf, test_x)
+mean(rf_preds == test_y)
+train_rf$bestTune
+varImp(train_rf)
+
+#ensemble
+model <- c("kmeans_preds","glm_preds","lda_preds","qda_preds","rf_preds","knn_preds","loess_preds")
+pred <- sapply(1:7, function(x){
+  as.factor(get(model[x]))})
+dim(pred)
+
+pred <- as.data.frame(pred)
+names(pred) <-c("kmeans_preds","glm_preds","lda_preds","qda_preds","rf_preds","knn_preds","loess_preds")
+acc <- colMeans(as.matrix(pred)==test_y)
+mean(acc)
+
+ensemble <- cbind(glm = glm_preds == "B", lda = lda_preds == "B", qda = qda_preds == "B", loess = loess_preds == "B", rf = rf_preds == "B", knn = knn_preds == "B", kmeans = kmeans_preds == "B")
+
+ensemble_preds <- ifelse(rowMeans(ensemble) > 0.5, "B", "M")
+mean(ensemble_preds == test_y)
+
