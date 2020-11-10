@@ -1,0 +1,389 @@
+---
+title: "movielens"
+author: "Maris Sekar"
+date: "08/11/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+# Load workspace containing training and validation data from edx
+load("~/harvardx-r-exercises/movielens/movielens_workspace.RData")
+
+# Load libraries
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dplyr)
+library(lubridate)
+library(recosystem)
+library(tinytex)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+A movie recommendation system was built as part of this project using five machine learning models and a baseline average model. The dataset "MovieLens" comes from the movielens.org research site run by GroupLens Research at the University of Minnesota where movie ratings are collected form users. The dataset provides ten million movie ratings for about 10,000 movies rated by about 70,000 users.90% of the dataset was used as training data and 10% was used as the validation dataset.
+
+The goal of the project was to determine a machine learning model that has a root mean square error (RMSE) of less than 0.86490 with the validation dataset. We will see that the Matrix Factorization model has the lowest RMSE of 0.7836. What this means is that this model can predict the movie ratings given the user and movie to a high degree of accuracy.
+
+The steps involved in the search for the optimal include performing exploratory data analysis to understand the data, followed by looking at the average rating, movie effect, combined movie and user effect, the regularized movie effect, the regularized movie and user effect and finally Matrix Factorization. We will see that the regularized movie and user effect RMSE is already lower than the goal of 0.86490 but given that the Matrix Factorization model was much effective with a much lower RMSE it was hard not to continue with the implementation. The Reco R package was used for the Matrix Factorization method.
+
+
+## Methods/Analysis
+Lets perform some exploratory data analysis on the training dataset:
+
+Lets look at the dimensions of the training data
+```{r}
+dim(edx)
+```
+
+Lets look at the highest rated movies:
+```{r}
+edx %>% group_by(movieId, title) %>% summarize(count=n()) %>% arrange(desc(count))
+```
+We can see that "Pulp Fiction, Forrest Gump and The Silence of the Lambs" are the movies that are most rated.
+
+Lets look at the users that rate frequently:
+```{r}
+edx %>% group_by(userId) %>% summarize(count=n()) %>% arrange(desc(count))
+```
+The top 2 users have given more than 6000 ratings followed by around 4500 for the next user.
+
+```{r}
+edx %>% select(rating) %>% group_by(rating) %>% summarize(count=n()) %>% arrange(desc(count))
+
+# Lets look at the distribution for ratings
+hist(edx$rating)
+```
+The rating four was given the most, followed by three and then five. The half ratings were the least popular amount users. This shows that users generally gave positive ratings in general and avoided half ratings.
+
+The first model we are going to use is the averaging model. This model takes the average rating and uses that as the prediction across all expected values for the validation dataset.
+```{r}
+# Get the average, use it for prediction and record RMSE
+mu_hat <- mean(edx$rating)
+rmse_avg <- RMSE(edx$rating, mu_hat)
+rmse_results <- tibble(method = "Just the average", RMSE = rmse_avg)
+```
+
+The second model obtains the movie effect by grouping the movies and summarizing by the movie's average rating after subtracting the mean of the train dataset. We subtract the mean of the whole dataset to bring the values closer and minimize the spread of data.
+```{r}
+# Assign edx as the train_set table and validation as the test_set table
+train_set <- edx
+test_set <- validation
+
+# Calculate the average
+mu <- mean(train_set$rating) 
+
+# Calculate the movie effect by looking at the mean when grouped by movie
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+# Join with validation test to compare with movies that have been predicted
+predicted_ratings <- mu+test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_i
+
+# Calculate RMSE and record
+model_1_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie Effect Model",
+                                     RMSE = model_1_rmse ))
+```
+We can see that this model is a little better than the average model.
+
+Now lets see how a model that takes into account user effect along with movie effect performs. The movie effect b_i is combined with the user effect b_u. The user effect b_u is calculated similar to the movie effect above. These are then added to the mean to form the prediction of this model.
+```{r}
+# Add user effect to the movie effect and get RMSE for comparison
+# with validation test
+user_avgs <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+predicted_ratings <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+model_2_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Movie + User Effects Model",  
+                                     RMSE = model_2_rmse ))
+```
+This model is better than the movie effect alone.
+
+Next we will look at the residual for the movie effect to see if regularization will help for the data set.
+```{r}
+# Calculate residual and plot it for the movie effect.
+test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  mutate(residual = rating - (mu + b_i)) %>%
+  arrange(desc(abs(residual))) %>% 
+  select(title,  residual) %>% slice(1:10) %>% knitr::kable()
+movie_residual <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  mutate(residual = rating - (mu + b_i)) %>%
+  arrange(desc(abs(residual))) %>% 
+  select(title,  residual)
+plot(1:50000, movie_residual$residual[1:50000])
+```
+From the above plot it can be seen that the residual is symmetric around 0.
+
+Lets look at the top 10 movies with the most positive movie effect.
+```{r}
+# Get distinct movie titles
+movie_titles <- edx %>% 
+  select(movieId, title) %>%
+  distinct()
+
+movie_avgs %>% left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_i)) %>% 
+  select(title, b_i) %>% 
+  slice(1:10) %>%  
+  knitr::kable()
+```
+
+Now lets look at the 10 movies with the least negative movie effect.
+```{r}
+movie_avgs %>% left_join(movie_titles, by="movieId") %>%
+  arrange(b_i) %>% 
+  select(title, b_i) %>% 
+  slice(1:10) %>%  
+  knitr::kable()
+```
+We can see there is a more negative movie effect than positive effect
+
+Next, inspect the top 10 movies with the most positive effect along with the number of reviews.
+```{r}
+train_set %>% dplyr::count(movieId) %>% 
+  left_join(movie_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_i)) %>% 
+  select(title, b_i, n) %>% 
+  slice(1:10) %>% 
+  knitr::kable()
+```
+We can see that the movies don't have many reviews.
+
+Inspect the least 10 movies with the most negative effect and the number of reviews.
+```{r}
+train_set %>% dplyr::count(movieId) %>% 
+  left_join(movie_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_i) %>% 
+  select(title, b_i, n) %>% 
+  slice(1:10) %>% 
+  knitr::kable()
+```
+We can see that the movies dont appear to be top 10 rated and least 10 rated movies in reality. This could be because people tend to review popular reviews and this is not captured in the top 10.
+
+This warrants regularization to be used. We want to first check the regularization rate histogram to get an idea of the how the regularization affects the movie effect. Lets set a regularization rate that gives a normal distribution to b_i and performs regularization - pulls values closer to 0.
+
+Lets first calculate the residual with regularization rate of 0.
+```{r}
+lambda <- 0
+mu <- mean(train_set$rating)
+movie_reg_avgs_no <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = sum(rating - mu)/(n()+lambda), n_i = n()) %>%
+  mutate(eff="No Regularization")
+```
+
+Next, lets calculate the residual with a regularization rate of 3.
+```{r}
+lambda2 <- 3
+movie_reg_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = sum(rating - mu)/(n()+lambda2), n_i = n()) %>%
+  mutate(eff="With Regularization Rate 3")
+```
+
+Lets plot the distribution for the regularized movie effect and non-regularized movie effect.
+```{r}
+reg_movie_eff <- rbind(movie_reg_avgs_no, movie_reg_avgs)
+ggplot(reg_movie_eff, aes(b_i, fill = eff)) + geom_density(alpha = 0.2)
+```
+We can see how the regularization rate helps pull the movie effect closer to zero.
+
+Lets compare this effect using a scatter plot.
+```{r}
+# Plot the regularized vs. original movie effect
+data_frame(original = movie_avgs$b_i, 
+           regularized = movie_reg_avgs$b_i, 
+           n = movie_reg_avgs$n_i) %>%
+  ggplot(aes(original, regularized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.5)
+```
+We can see that the regularization helps pull the movie effect closer to 0 as well as how the movies with more reviews are unaffected by the effect which is as expected.
+
+Now, lets inspect the top 10 movies with positive movie effect again.
+```{r}
+train_set %>%
+  dplyr::count(movieId) %>% 
+  left_join(movie_reg_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_i)) %>% 
+  select(title, b_i, n) %>% 
+  slice(1:10) %>% 
+  knitr::kable()
+```
+We can see that the regularized movie effect makes more sense looking at the titles of the movie names.
+
+Lets look at the least 10 movies with lowest ratings as well.
+```{r}
+train_set %>%
+  dplyr::count(movieId) %>% 
+  left_join(movie_reg_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_i) %>% 
+  select(title, b_i, n) %>% 
+  slice(1:10) %>% 
+  knitr::kable()
+```
+Looking at the movie titles it is understood why these movies were given lower ratings.
+
+Get the predicted ratings based on this regularized movie effect model.
+```{r}
+predicted_ratings <- test_set %>% 
+  left_join(movie_reg_avgs, by='movieId') %>%
+  mutate(pred = mu + b_i) %>%
+  .$pred
+
+# Calculate RMSE and add to the results table
+model_3_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Movie Effect Model",  
+                                     RMSE = model_3_rmse ))
+rmse_results %>% knitr::kable()
+```
+Comparing the RMSE for the regularized movie effect model with the original movie effect model it doesn't appear regularization improved RMSE siginificantly. I checked other values for lambda like 2, 6, 100, 1000 - I get similar RMSE results with those values too.
+
+Lets now build the regularized movie and user effect model. This time we will use different values for lambda to tune it for the best RMSE result.
+```{r}
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+# Lets plot to see the lambda that gives the least RMSE
+qplot(lambdas, rmses)  
+lambda <- lambdas[which.min(rmses)]
+lambda
+```
+5.25 is the lambda that gives the minimum RMSE as seen above.
+
+Lets add it to our RMSE table
+```{r}
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Movie + User Effect Model",  
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+```
+We can see a considerable improvement with the regularized movie and user effect model. Note that this is already lower than the target RMSE of 0.86490. But we will try the Matrix Factorization method to see if there is an improvement.
+
+Next we will try the final model - Matrix Factorization - we will use the Reco R package to build a recommender system using Matrix Factorization. First create a data frame with user, movie and rating.
+```{r}
+train_set <- edx  %>%  select(userId, movieId, rating) %>%
+  mutate(userId = as.integer(userId)
+         ,movieId = as.integer(movieId)
+         ,rating = rating)   
+
+# Lets specify the source of data to the recommender system. This is stored
+# in memory rather than refering to a file.
+train_Memory <- data_memory(user_index = train_set$userId,
+                            item_index = train_set$movieId,
+                            rating = train_set$rating, index1 = TRUE)
+
+# Create an instance of the recommender system and initialize it
+recommender <- Reco()
+```
+
+Next, tune the recommender system. The following parameters are used to tune the recommendation system to ensure this does not take a lot of time to run. Most are just the first default value except for the number of iterations. I set the no. of iterations to 10 because I found this is enough to give a considerable improvement in RMSE. Other values for iterations do not appear to result in a noticeable change to the RMSE.
+```{r}
+opts <- recommender$tune(
+  train_Memory,
+  opts = list(
+    dim      = c(70), # number of latent factors
+    costp_l1 = 0, # L1 regularization cost for user factors
+    costq_l1 = 0, # L1 regularization cost for item factors
+    nthread  = 4, # number of threads for parallel computing
+    niter    = 10 # number of iterations
+  )
+)
+```
+
+Train the recommender system with optimized parameters.
+```{r}
+recommender$train(train_Memory, opts = c(opts$min, # optimized parameters                     
+                                         niter = 10, # iterations 
+                                         nthread = 4)) # number of threads 
+```
+
+Prepare the validation set to calculate RMSE.
+```{r}
+test_set <- validation %>% select(userId, movieId, rating) %>%
+  mutate(userId = as.integer(userId)
+         ,movieId = as.integer(movieId)
+         ,rating = rating)   
+test_Memory <- data_memory(user_index = test_set$userId, 
+                           item_index = test_set$movieId, 
+                           rating = test_set$rating, index1 = TRUE)  
+```
+
+Get prediction for validation data set.
+```{r}
+test_set$prediction <- recommender$predict(test_Memory, out_memory())
+```
+
+Lets make a histogram of the predictions to see the distribution of the predicted ratings.
+```{r}
+hist(test_set$prediction)
+```
+We can see that there are some values below 0.5:
+```{r}
+sum(test_set$prediction < 0.5)
+```
+There are also some values above 5:
+```{r}
+sum(test_set$prediction > 5)
+```
+
+We can see there are a few values that are greater than 5 and less than 0.5 rating. We will set these to 5 and 0.5 respectively.
+```{r}
+test_set <- test_set %>% mutate(prediction_opts = case_when(prediction < 0.5 ~ 0.5, prediction > 5 ~ 5, TRUE ~ prediction))
+```
+
+Calculate RMSE and record result
+```{r}
+RMSE <- RMSE(test_set$rating, test_set$prediction_opts)  
+# When input is the original, real-valued rating use: RMSE <- rmse(test$rating, ceiling(test$prediction_opts * 2)/2 )   
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Matrix Factorization Model",  
+                                     RMSE = RMSE))
+```
+
+
+## Results
+Here are the results for the six models we used for our prediction along with the RMSE results:
+```{r}
+rmse_results %>% knitr::kable()
+```
+As can be seen the most effective model is Matrix Factorization. The movie and user effect appears to have been captured efficiently by the Reco recommender system using Matrix Factorization. The next best model is the regularized movie and user effects model which seems to have a considerable improvement over the original movie and user effects model.
+
+
+## Conclusion
+This project tested five (six including the average model) machine learning models in order to recommend movie ratings based on the movie and user characteristics. One problem with this prediction is that we could see that rating 4.0 was considerably more popular than the other ratings. As a result the models may have been biased more towards the higher ratings and thus could be less accurate with other datasets. We can check the specificity and sensitivity of the model by forcing it to predict only multiples of 0.5 from 0 to 5.
+

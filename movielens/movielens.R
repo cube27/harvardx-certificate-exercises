@@ -61,13 +61,13 @@ edx[edx$rating==3]
 movie_group <- edx %>% group_by(movieId) %>% summarize(count=n())
 user_group <- edx %>% group_by(userId) %>% summarize(n())
 
+# Lets review the genre counts
 edx %>% filter(genres %like% "Drama") %>% summarize(n())
 edx %>% filter(genres %like% "Comedy") %>% summarize(n())
 edx %>% filter(genres %like% "Thriller") %>% summarize(n())
 edx %>% filter(genres %like% "Romance") %>% summarize(n())
 
-movie_group %>% arrange(desc(count))
-edx[edx$movieId==296]
+# Review ratings distribution
 edx %>% select(rating) %>% group_by(rating) %>% summarize(count=n()) %>% arrange(desc(count))
 
 # Lets look at the distribution for ratings
