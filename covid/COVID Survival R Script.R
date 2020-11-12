@@ -14,7 +14,7 @@ covid <- read_csv(url(urlfile))
 
 # Add dependent variable/target variable
 # Check date_died to see if death has occurred - create a new field based on this.
-head(ifelse(train_set$date_died == "9999-99-99", 1, 0))
+head(ifelse(train_set$date_died == "9999-99-99", 0, 1))
 covid <- covid %>% mutate(died=ifelse(covid$date_died == "9999-99-99", 0, 1))
 head(covid$date_died)
 head(covid$died)

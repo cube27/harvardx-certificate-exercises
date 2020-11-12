@@ -1,0 +1,311 @@
+---
+title: "COVID survival"
+author: "Maris Sekar"
+date: "11/11/2020"
+output: pdf_document
+---
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE)
+```
+
+## Executive Summary
+The COVID-19 virus has taken on the world by storm since its discovery late December of 2019. 1.28 million deaths have been reported worldwide at the time of the writing of this report and this number is seen to be climbing almost one year into its discovery. It would be helpful to see the various factors influencing COVID related deaths using a ML model. In this project we are going to predict the COVID death based on patient features such as age, gender, and medical conditions.
+
+After reviewing a few data sources, the Mexico Government COVID data set seems to be the most complete data set found on Kaggle.com. I tried three classification models - Decision Tree, KNN and Random Forest and finally an Ensemble to see if any improvements can be generated. The Decision Tree model appears to be the most accurate out of the three for this data set. Due to the high prevalence of survivors the specificity of the models are low. Overall accuracy was about 94.8% and balanced accuracy of the model was about 67%.
+
+Link to dataset:
+https://www.kaggle.com/tanmoyx/covid19-patient-precondition-dataset?select=covid.csv
+
+
+## Methods/Analysis
+Lets load the required libraries.
+```{r}
+# Required libraries
+if (!require("readr")) install.packages("readr")
+if (!require("rpart.plot")) install.packages("rpart.plot")
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("caret")) install.packages("caret")
+if (!require("randomForest")) install.packages("randomForest")
+library(readr)
+library(caret)
+library(dplyr)
+library(rpart.plot)
+library(randomForest)
+```
+
+Lets load the COVID patient characteristics from my github.
+```{r}
+urlfile="https://raw.githubusercontent.com/cube27/harvardx-r-exercises/master/covid/data/covid.csv"
+covid <- read_csv(url(urlfile))
+```
+
+We see that there is date_died field that records the date of death. Lets create a target variable, "died", that keeps track of the death. A one indicates that the patient expired and zero means they are alive.
+```{r}
+# Add field to data set
+covid <- covid %>% mutate(died=ifelse(covid$date_died == "9999-99-99", 0, 1))
+head(covid$date_died)
+head(covid$died)
+```
+
+The class needs to be a factor for classification models. Change type of the died field to factor data type.
+```{r}
+covid$died <- as.factor(covid$died)
+class(covid$died)
+```
+
+Lets review the distribution of the COVID death population.
+```{r}
+table(covid$died)
+```
+
+We will split the data to training and validation datasets. A 90/10 split is performed because we have a considerably large dataset.
+```{r,results = 'hide'}
+# Split the data into 90% training data and 10% test data for validation.
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(y = covid$died, times = 1,
+                                  p = 0.1, list = FALSE)
+train_set <- covid[-test_index,]
+test_set <- covid[test_index,]
+```
+
+## Exploratory data analysis
+Lets review the columns in detail:
+```{r}
+names(train_set)
+```
+
+Dimensions of the training data:
+```{r}
+dim(train_set)
+```
+
+Get a subset of features in the data set. Only the numeric columns are selected as features. 19 features are selected.
+```{r}
+features <- c("sex", "patient_type", "intubed", "pneumonia", "age", "pregnancy", "diabetes", "copd", "asthma", "inmsupr", "hypertension", "other_disease", "cardiovascular", "obesity", "renal_chronic", "tobacco", "contact_other_covid", "covid_res", "icu")
+```
+
+We are going to to do some preprocessing. We select only 10000 random samples from the training set to train the classification models. We will also select 1000 random samples from the validation dataset to do our actual validation.
+```{r}
+set.seed(1, sample.kind = "Rounding")
+# Sample 10000 observations from the training data.
+index <- sample(nrow(train_set), 10000)
+x <- train_set[index, features]
+y <- train_set$died[index]
+
+# Sample 1000 observations from the validation data
+index <- sample(nrow(test_set), 1000)
+x_test <- test_set[index, features]
+y_test <- test_set$died[index]
+```
+
+Lets analyze the relationship between the features.
+```{r}
+# Find correlation matrix of features
+cor(x)
+```
+There are some interesting relationships highlighted above:
+- Gender is highly correlated with pregnancy. Since females are most likely to be pregnant. This makes sense.
+- Patient type is highly correlated with intubated, icu and pneumonia medical conditions. I am not quite sure what patient type is but it appears to be a category assigned to patients based on their medical condition which we can see in the correlation matrix.
+- Patients who had pneumonia and were in icu were most likely intubated.
+- Younger patients were most likely intubated and had pneumonia due to the inverse relationship between age and these medical conditions.
+- Diabetic and obese patients were more likely to have other medical conditions as well.
+
+Next, lets ignore fields that are near zero to avoid noise.
+```{r}
+nzv <- nearZeroVar(x)
+
+# Strip the near zero columns.
+col_index <- setdiff(1:ncol(x), nzv)
+length(col_index)  
+```
+There are 13 fields after this. 6 features were removed.
+
+## Modeling/Analysis
+
+Lets train a Decision Tree Model and plot to see which complexity parameter gives the most accuracy.
+```{r}
+set.seed(1, sample.kind = "Rounding")
+train_rpart <- train(x[, col_index], y,
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.05, 0.002)))
+# Plot the Accuracy vs. complexity paratemeter, cp
+plot_rpart <- plot(train_rpart)
+plot_rpart
+```
+We can see cp = 0.01 gives the most accuracy.
+
+Get confusion matrix for the model and get the balanced accuracy.
+```{r}
+rpart_cm <- confusionMatrix(predict(train_rpart, x_test), y_test)
+rpart_cm$byClass["Balanced Accuracy"]
+accuracy_results <- tibble(Model = "Decision Tree Model", 
+                           `Overall Accuracy` = rpart_cm$overall["Accuracy"], 
+                           `Balanced Accuracy` = rpart_cm$byClass["Balanced Accuracy"])
+```
+Please note that the the regular accuracy is 94.8% as shown below. The above is the balanced accuracy taking specificity and sensitivity into account.
+```{r}
+rpart_cm$overall["Accuracy"]
+```
+
+Access the final model and plot it.
+```{r}
+rpart.plot(train_rpart$finalModel)
+```
+Looks like the features patient_type, age, covid_res, intubed, contact_other_covid and pneumonia captures almost all the COVID situations seen in the dataset. We can see patients older than 51 are more likely to expire provided they are intubed and have pneumonia. This shows the small percentage of COVID deaths on the bottom right side of the decision tree.
+
+
+Lets now turn to the KNN Model. We will train a KNN model and plot it to find the no. of neighbors producing the most accuracy.
+```{r}
+set.seed(1, sample.kind = "Rounding")
+control <- trainControl(method = "cv", number = 10, p = .9)
+train_knn <- train(x[,col_index], y,
+                   method = "knn", 
+                   tuneGrid = data.frame(k = seq(1, 24, 3)),
+                   trControl = control)
+# Plot the KNN model Accuracy vs. No. of Neighbors
+ggplot(train_knn)
+```
+The bestTune field indicates:
+```{r}
+train_knn$bestTune[1]
+```
+
+Now lets repeat with 5-fold cross validation KNN model. Each time it will sample 1000 samples.
+```{r}
+# sample size
+n <- 1000
+# no. of folds
+b <- 5
+set.seed(1)
+index <- sample(nrow(x), n)
+set.seed(1, sample.kind = "Rounding")
+control <- trainControl(method = "cv", number = b, p = .9)
+train_knn <- train(x[index ,col_index], y[index],
+                   method = "knn",
+                   tuneGrid = data.frame(k = seq(1, 24, 3)),
+                   trControl = control)
+# Plot the KNN model Accuracy vs. No. of Neighbors
+ggplot(train_knn)
+```
+Now the bestTune field indicates:
+```{r}
+train_knn$bestTune[1]
+```
+
+Lets fit the knn model based on this tuned k value. We will make predictions on the validation data set and create a confusion matrix.
+```{r}
+fit_knn <- knn3(x[ ,col_index], y,  k = train_knn$bestTune[1])
+
+y_hat_knn <- predict(fit_knn,
+                     x_test[, col_index],
+                     type="class")
+knn_cm <- confusionMatrix(y_hat_knn, factor(y_test))
+knn_cm
+```
+Again, much lower specificity but high sensitivity. This is due to the high prevalence in the positive class, 0, with a prevalance of 0.933. Accuracy is 94.4% and balanced accuracy is 61.7%. This is lower than the Decision Tree model.
+
+Record the balanced accuracy in our results table.
+```{r}
+accuracy_results <- bind_rows(accuracy_results,
+                          data_frame(Model = "KNN Model", 
+                                     `Overall Accuracy` = knn_cm$overall["Accuracy"],
+                                     `Balanced Accuracy` = knn_cm$byClass["Balanced Accuracy"] ))
+```
+
+
+Lets check prevalence in data to confirm the survival rate.
+```{r}
+mean(covid$died == "0")
+```
+This confirms the prevalence we saw earlier above.
+
+
+Now we will train a Random Forest classifier. We choose to use 100 trees. We will also find the optimal mtry number - number of variables available for splitting at each tree node.
+```{r}
+set.seed(1, sample.kind = "Rounding")
+train_rf <- train(x[, col_index], y, method = "rf", 
+                  ntree = 100,
+                  tuneGrid = data.frame(mtry = seq(1:7)))
+# Plot Random Forest Accuracy vs. No. of Randomly selected predictors
+plot(train_rf)
+```
+The optimal mtry value appears to be 3.
+
+Lets look at the confusion matrix after testing the predicted values with the validation data set.
+```{r}
+rf_cm <- confusionMatrix(predict(train_rf, x_test), y_test)
+rf_cm
+```
+Again, similar results to the KNN model. Decision Tree model balanced accuracy is still the highest we have.
+
+We will record the balanced accuracy in our results table for comparison.
+```{r}
+accuracy_results <- bind_rows(accuracy_results,
+                              data_frame(Model = "Random Forest", 
+                                         `Overall Accuracy` = rf_cm$overall["Accuracy"],
+                                         `Balanced Accuracy` = rf_cm$byClass["Balanced Accuracy"] ))
+```
+
+Find features importance for the random forest model.
+```{r}
+imp <- varImp(train_rf)
+imp
+```
+We can see how age, intubed, pneumonia, icu and patient_type take the top 5 places for feature importance. This makes sense based on the statistics that is publicly available.
+
+Lets combine with the tree terms from the Decision Tree model.
+```{r}
+tree_terms <- as.character(unique(train_rpart$finalModel$frame$var[!(train_rpart$finalModel$frame$var == "<leaf>")]))
+tree_terms
+```
+We can see that almost all the terms we saw in the Decision Tree model agrees with the feature importance from the random forest model except for icu.
+
+Lets rank the combined features based on their importance.
+```{r}
+tibble(term = rownames(imp$importance), importance = imp$importance$Overall) %>%
+  mutate(rank = rank(-importance)) %>%
+  arrange(desc(importance)) %>%
+  filter(term %in% tree_terms)
+```
+Age is the main factor contributing to a COVID death followed by the medical conditions of being intubated and having pneumonia. This is very interesting and supports the views of the statistics we have publicly available.
+
+Lets build an ensemble with Decision Tree, KNN and Random Forest models to see if we can improve our accuracy.
+```{r}
+# Combine all the three model predictions
+pred_rpart <- predict(train_rpart, x_test)
+pred_knn <- predict(train_knn, x_test)
+pred_rf <- predict(train_rf, x_test)
+pred <- cbind(rpart=as.numeric(pred_rpart)-1, knn=as.numeric(pred_knn)-1, rf=as.numeric(pred_rf)-1)
+dim(pred)
+```
+
+Calculate average accuracy for each model. Note: this is not the balanced accuracy!
+```{r}
+accuracy <- colMeans(pred == y_test)
+accuracy
+mean(accuracy)
+```
+
+The Ensemble model accuracy is calculated below taking the best accuracy for each observation.
+```{r}
+means_died <- rowMeans(pred == 1)
+y_hat <- ifelse(means_died > 0.3, "1", "0")
+mean(y_hat == y_test)
+```
+
+
+## Results
+Here are the results of our models:
+```{r}
+accuracy_results
+```
+The overall accuracy is very similar for all models with the Decision Tree model being slightly higher at 94.8%. The balanced accuracy for the Decision Tree model is comparatively the highest at 67.4% after taking into account the sensitivity and specificity. This lower balanced accuracy is due to the prevalance in the data set caused by survivors - a high prevlance means much lower specificity.
+
+
+## Conclusion
+The results indicated a lot of interesting insights such as:
+1) What are the most important features that contribute to a COVID related death which in this case were - age, intubation, pneumonia medical condition (Top 3 importance).
+2) How the features were related to each other confirming the validity of the dataset such as gender influencing pregnant feature. ICU patients were more likely to be intubated and had pneumonia medical condition.
+
+Overall, I enjoyed this project and the insights it had to offer. I am thankful for being able to take this course and keeping my evenings busy with something like this!
